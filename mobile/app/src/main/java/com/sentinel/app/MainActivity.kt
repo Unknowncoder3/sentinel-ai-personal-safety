@@ -15,9 +15,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -26,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -37,28 +40,14 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
-            permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true) {
-            tracker.start()
-        }
+        if (permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true || permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true) tracker.start()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        tracker = LocationTracker(
-            context = this,
-            deviceIdProvider = { prefs.getString("device_id", null) },
-            batteryProvider = { batteryLevel() }
-        )
-
+        tracker = LocationTracker(this, { prefs.getString("device_id", null) }, { batteryLevel() })
         ApiClient.setToken(prefs.getString("token", null))
-
-        setContent {
-            MaterialTheme {
-                SentinelScreen()
-            }
-        }
+        setContent { MaterialTheme { SentinelScreen() } }
     }
 
     private fun batteryLevel(): Float? {
@@ -74,68 +63,98 @@ class MainActivity : ComponentActivity() {
         else permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
     }
 
+    private fun triggerSOS(onStatus: (String) -> Unit, onFinished: (String) -> Unit) {
+        scope.launch {
+            for (seconds in 5 downTo 1) {
+                onStatus("SOS will activate in ${seconds}s — tap Cancel to stop")
+                delay(1000)
+            }
+            onStatus("Sending emergency alert...")
+            runCatching {
+                ApiClient.service.createSOS(
+                    SOSCreate(
+                        device_id = prefs.getString("device_id", null),
+                        latitude = tracker.lastLatitude,
+                        longitude = tracker.lastLongitude,
+                        message = "Emergency SOS activated from Sentinel Android"
+                    )
+                )
+            }.onSuccess { response ->
+                prefs.edit().putString("active_sos_id", response.id).apply()
+                onFinished("SOS ACTIVE — guardians can now respond")
+            }.onFailure { onFinished("SOS failed: ${it.message ?: "unknown error"}") }
+        }
+    }
+
+    private fun cancelSOS(onStatus: (String) -> Unit) {
+        scope.coroutineContext.cancelChildren()
+        onStatus("SOS cancelled")
+    }
+
     @androidx.compose.runtime.Composable
     private fun SentinelScreen() {
         var email by remember { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
         var deviceName by remember { mutableStateOf("My Sentinel Phone") }
         var status by remember { mutableStateOf(if (prefs.getString("device_id", null) != null) "Device paired" else "Not paired") }
+        var sosActive by remember { mutableStateOf(prefs.getString("active_sos_id", null) != null) }
+        var countdown by remember { mutableIntStateOf(0) }
 
-        Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
-        ) {
+        Column(Modifier.fillMaxSize().padding(24.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Sentinel", style = MaterialTheme.typography.headlineLarge)
             Text("Personal Safety & Device Recovery")
 
-            OutlinedTextField(email, { email = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Email") })
-            OutlinedTextField(password, { password = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Password") })
+            OutlinedTextField(email, { email = it }, Modifier.fillMaxWidth(), label = { Text("Email") })
+            OutlinedTextField(password, { password = it }, Modifier.fillMaxWidth(), label = { Text("Password") })
+            Button(onClick = {
+                scope.launch {
+                    status = "Signing in..."
+                    runCatching {
+                        val result = ApiClient.service.login(email.trim(), password)
+                        prefs.edit().putString("token", result.access_token).apply()
+                        ApiClient.setToken(result.access_token)
+                    }.onSuccess { status = "Signed in" }.onFailure { status = "Login failed: ${it.message ?: "unknown error"}" }
+                }
+            }, Modifier.fillMaxWidth()) { Text("Sign in") }
+
+            OutlinedTextField(deviceName, { deviceName = it }, Modifier.fillMaxWidth(), label = { Text("Device name") })
+            Button(onClick = {
+                scope.launch {
+                    status = "Pairing device..."
+                    val identifier = prefs.getString("device_identifier", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_identifier", it).apply() }
+                    runCatching { ApiClient.service.registerDevice(DeviceCreate(deviceName.trim(), "android", identifier)) }
+                        .onSuccess { prefs.edit().putString("device_id", it.id).apply(); status = "Device paired: ${it.name}" }
+                        .onFailure { status = "Pairing failed: ${it.message ?: "unknown error"}" }
+                }
+            }, Modifier.fillMaxWidth()) { Text("Pair this phone") }
+
+            Button(onClick = {
+                if (prefs.getString("device_id", null) == null) status = "Pair the phone first"
+                else { status = "Location tracking started"; startTracking() }
+            }, Modifier.fillMaxWidth()) { Text("Start location tracking") }
+
+            Text("Emergency Safety", style = MaterialTheme.typography.titleLarge)
+            Text("Location is captured only from this explicitly paired device.")
 
             Button(
+                enabled = !sosActive && countdown == 0 && prefs.getString("device_id", null) != null,
                 onClick = {
-                    scope.launch {
-                        status = "Signing in..."
-                        runCatching {
-                            val result = ApiClient.service.login(email.trim(), password)
-                            prefs.edit().putString("token", result.access_token).apply()
-                            ApiClient.setToken(result.access_token)
-                        }.onSuccess { status = "Signed in" }
-                            .onFailure { status = "Login failed: ${it.message ?: "unknown error"}" }
-                    }
+                    countdown = 5
+                    triggerSOS({ text -> status = text }, { text -> countdown = 0; status = text; sosActive = true })
+                    scope.launch { for (i in 5 downTo 1) { countdown = i; delay(1000) } }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("Sign in") }
+            ) { Text(if (countdown > 0) "SOS ACTIVATING… $countdown" else "🚨 EMERGENCY SOS") }
 
-            OutlinedTextField(deviceName, { deviceName = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Device name") })
-
-            Button(
-                onClick = {
-                    scope.launch {
-                        status = "Pairing device..."
-                        val identifier = prefs.getString("device_identifier", null) ?: UUID.randomUUID().toString().also {
-                            prefs.edit().putString("device_identifier", it).apply()
-                        }
-                        runCatching {
-                            ApiClient.service.registerDevice(DeviceCreate(deviceName.trim(), "android", identifier))
-                        }.onSuccess {
-                            prefs.edit().putString("device_id", it.id).apply()
-                            status = "Device paired: ${it.name}"
-                        }.onFailure { status = "Pairing failed: ${it.message ?: "unknown error"}" }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Pair this phone") }
-
-            Button(
-                onClick = {
-                    if (prefs.getString("device_id", null) == null) status = "Pair the phone first"
-                    else { status = "Location tracking started"; startTracking() }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) { Text("Start location tracking") }
+            if (countdown > 0) {
+                OutlinedButton(onClick = { countdown = 0; cancelSOS { status = it } }, Modifier.fillMaxWidth()) { Text("Cancel SOS") }
+            }
+            if (sosActive) {
+                OutlinedButton(onClick = { status = "Resolve the SOS from the dashboard" }, Modifier.fillMaxWidth()) { Text("SOS ACTIVE") }
+            }
 
             Text("Status: $status")
-            Text("Updates are sent only for this explicitly paired device.")
+            Text("Security: actions are restricted to your authenticated account and enrolled device.")
         }
     }
 
