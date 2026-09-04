@@ -7,6 +7,7 @@ import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
 import retrofit2.http.Field
 import retrofit2.http.FormUrlEncoded
+import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.Path
 
@@ -19,6 +20,8 @@ data class LocationPayload(val latitude: Double, val longitude: Double, val accu
 data class LocationResponse(val latitude: Double, val longitude: Double, val accuracy_m: Float?, val battery_level: Float?, val recorded_at: String?, val id: String, val device_id: String, val received_at: String)
 data class SOSCreate(val device_id: String?, val latitude: Double?, val longitude: Double?, val message: String?)
 data class SOSResponse(val id: String, val device_id: String?, val status: String, val latitude: Double?, val longitude: Double?, val message: String?, val created_at: String, val acknowledged_at: String?, val resolved_at: String?)
+data class GuardianCreate(val name: String, val phone: String, val email: String?)
+data class GuardianResponse(val id: String, val name: String, val phone: String, val email: String?, val created_at: String)
 
 interface SentinelApi {
     @FormUrlEncoded
@@ -33,6 +36,12 @@ interface SentinelApi {
 
     @POST("api/v1/safety/sos")
     suspend fun createSOS(@Body sos: SOSCreate): SOSResponse
+
+    @POST("api/v1/safety/guardians")
+    suspend fun addGuardian(@Body guardian: GuardianCreate): GuardianResponse
+
+    @GET("api/v1/safety/guardians")
+    suspend fun listGuardians(): List<GuardianResponse>
 }
 
 class AuthInterceptor(private val tokenProvider: () -> String?) : Interceptor {
