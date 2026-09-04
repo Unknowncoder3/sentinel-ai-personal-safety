@@ -22,6 +22,11 @@ class LocationTracker(
         com.google.android.gms.location.LocationServices.getFusedLocationProviderClient(context)
     private val scope = CoroutineScope(Dispatchers.IO)
 
+    @Volatile var lastLatitude: Double? = null
+        private set
+    @Volatile var lastLongitude: Double? = null
+        private set
+
     private val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 15_000L)
         .setMinUpdateIntervalMillis(10_000L)
         .setMinUpdateDistanceMeters(10f)
@@ -31,6 +36,8 @@ class LocationTracker(
         override fun onLocationResult(result: LocationResult) {
             val deviceId = deviceIdProvider() ?: return
             result.locations.forEach { location ->
+                lastLatitude = location.latitude
+                lastLongitude = location.longitude
                 scope.launch {
                     runCatching {
                         ApiClient.service.updateLocation(
