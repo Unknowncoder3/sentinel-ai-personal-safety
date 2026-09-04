@@ -15,23 +15,10 @@ private const val API_BASE_URL = "http://10.0.2.2:8000/"
 data class TokenResponse(val access_token: String, val token_type: String)
 data class DeviceCreate(val name: String, val platform: String, val device_identifier: String)
 data class DeviceResponse(val id: String, val name: String, val platform: String, val device_identifier: String)
-data class LocationPayload(
-    val latitude: Double,
-    val longitude: Double,
-    val accuracy_m: Float?,
-    val battery_level: Float?,
-    val recorded_at: String?
-)
-data class LocationResponse(
-    val latitude: Double,
-    val longitude: Double,
-    val accuracy_m: Float?,
-    val battery_level: Float?,
-    val recorded_at: String?,
-    val id: String,
-    val device_id: String,
-    val received_at: String
-)
+data class LocationPayload(val latitude: Double, val longitude: Double, val accuracy_m: Float?, val battery_level: Float?, val recorded_at: String?)
+data class LocationResponse(val latitude: Double, val longitude: Double, val accuracy_m: Float?, val battery_level: Float?, val recorded_at: String?, val id: String, val device_id: String, val received_at: String)
+data class SOSCreate(val device_id: String?, val latitude: Double?, val longitude: Double?, val message: String?)
+data class SOSResponse(val id: String, val device_id: String?, val status: String, val latitude: Double?, val longitude: Double?, val message: String?, val created_at: String, val acknowledged_at: String?, val resolved_at: String?)
 
 interface SentinelApi {
     @FormUrlEncoded
@@ -43,6 +30,9 @@ interface SentinelApi {
 
     @POST("api/v1/devices/{deviceId}/location")
     suspend fun updateLocation(@Path("deviceId") deviceId: String, @Body location: LocationPayload): LocationResponse
+
+    @POST("api/v1/safety/sos")
+    suspend fun createSOS(@Body sos: SOSCreate): SOSResponse
 }
 
 class AuthInterceptor(private val tokenProvider: () -> String?) : Interceptor {
