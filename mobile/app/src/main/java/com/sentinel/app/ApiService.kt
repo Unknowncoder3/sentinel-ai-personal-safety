@@ -23,12 +23,10 @@ data class GuardianResponse(val id: String, val name: String, val phone: String,
 data class JourneyCreate(val device_id: String?, val destination: String, val start_latitude: Double?, val start_longitude: Double?, val end_latitude: Double?, val end_longitude: Double?, val eta: String)
 data class JourneyResponse(val id: String, val device_id: String?, val destination: String, val start_latitude: Double?, val start_longitude: Double?, val end_latitude: Double?, val end_longitude: Double?, val eta: String, val status: String, val risk_score: Int, val created_at: String, val completed_at: String?)
 data class JourneyPointPayload(val latitude: Double, val longitude: Double, val speed_mps: Float?, val bearing: Float?, val battery_level: Float?, val recorded_at: String?)
-
-auto data class JourneyPointResponse(val id: String, val journey_id: String, val latitude: Double, val longitude: Double, val speed_mps: Float?, val bearing: Float?, val battery_level: Float?, val recorded_at: String?)
+data class JourneyPointResponse(val id: String, val journey_id: String, val latitude: Double, val longitude: Double, val speed_mps: Float?, val bearing: Float?, val battery_level: Float?, val recorded_at: String?)
 
 interface SentinelApi {
-    @FormUrlEncoded
-    @POST("api/v1/auth/login")
+    @FormUrlEncoded @POST("api/v1/auth/login")
     suspend fun login(@Field("username") email: String, @Field("password") password: String): TokenResponse
     @POST("api/v1/devices") suspend fun registerDevice(@Body device: DeviceCreate): DeviceResponse
     @POST("api/v1/devices/{deviceId}/location") suspend fun updateLocation(@Path("deviceId") deviceId: String, @Body location: LocationPayload): LocationResponse
