@@ -34,6 +34,7 @@ interface SentinelApi {
     @POST("api/v1/safety/guardians") suspend fun addGuardian(@Body guardian: GuardianCreate): GuardianResponse
     @GET("api/v1/safety/guardians") suspend fun listGuardians(): List<GuardianResponse>
     @POST("api/v1/journeys") suspend fun createJourney(@Body journey: JourneyCreate): JourneyResponse
+    @GET("api/v1/journeys/{journeyId}") suspend fun getJourney(@Path("journeyId") journeyId: String): JourneyResponse
     @POST("api/v1/journeys/{journeyId}/points") suspend fun addJourneyPoint(@Path("journeyId") journeyId: String, @Body point: JourneyPointPayload): JourneyPointResponse
     @POST("api/v1/journeys/{journeyId}/complete") suspend fun completeJourney(@Path("journeyId") journeyId: String): JourneyResponse
 }
