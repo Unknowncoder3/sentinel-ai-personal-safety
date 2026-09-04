@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var tracker: LocationTracker
     private val prefs by lazy { getSharedPreferences("sentinel", Context.MODE_PRIVATE) }
     private val scope = CoroutineScope(Dispatchers.Main)
+    private var sosCountdownJob: Job? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -63,12 +65,15 @@ class MainActivity : ComponentActivity() {
         else permissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
     }
 
-    private fun triggerSOS(onStatus: (String) -> Unit, onFinished: (String) -> Unit) {
-        scope.launch {
+    private fun triggerSOS(onStatus: (String) -> Unit, onFinished: (String) -> Unit, onCountdown: (Int) -> Unit) {
+        sosCountdownJob?.cancel()
+        sosCountdownJob = scope.launch {
             for (seconds in 5 downTo 1) {
+                onCountdown(seconds)
                 onStatus("SOS will activate in ${seconds}s — tap Cancel to stop")
                 delay(1000)
             }
+            onCountdown(0)
             onStatus("Sending emergency alert...")
             runCatching {
                 ApiClient.service.createSOS(
@@ -86,8 +91,10 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun cancelSOS(onStatus: (String) -> Unit) {
-        scope.coroutineContext.cancelChildren()
+    private fun cancelSOS(onStatus: (String) -> Unit, onCountdown: (Int) -> Unit) {
+        sosCountdownJob?.cancel()
+        sosCountdownJob = null
+        onCountdown(0)
         onStatus("SOS cancelled")
     }
 
@@ -96,6 +103,10 @@ class MainActivity : ComponentActivity() {
         var email by remember { mutableStateOf("") }
         var password by remember { mutableStateOf("") }
         var deviceName by remember { mutableStateOf("My Sentinel Phone") }
+        var guardianName by remember { mutableStateOf("") }
+        var guardianPhone by remember { mutableStateOf("") }
+        var guardianEmail by remember { mutableStateOf("") }
+        var guardians by remember { mutableStateOf<List<GuardianResponse>>(emptyList()) }
         var status by remember { mutableStateOf(if (prefs.getString("device_id", null) != null) "Device paired" else "Not paired") }
         var sosActive by remember { mutableStateOf(prefs.getString("active_sos_id", null) != null) }
         var countdown by remember { mutableIntStateOf(0) }
@@ -113,7 +124,11 @@ class MainActivity : ComponentActivity() {
                         val result = ApiClient.service.login(email.trim(), password)
                         prefs.edit().putString("token", result.access_token).apply()
                         ApiClient.setToken(result.access_token)
-                    }.onSuccess { status = "Signed in" }.onFailure { status = "Login failed: ${it.message ?: "unknown error"}" }
+                        ApiClient.service.listGuardians()
+                    }.onSuccess {
+                        guardians = it
+                        status = "Signed in — guardians loaded"
+                    }.onFailure { status = "Login failed: ${it.message ?: "unknown error"}" }
                 }
             }, Modifier.fillMaxWidth()) { Text("Sign in") }
 
@@ -133,21 +148,53 @@ class MainActivity : ComponentActivity() {
                 else { status = "Location tracking started"; startTracking() }
             }, Modifier.fillMaxWidth()) { Text("Start location tracking") }
 
+            Text("Trusted Guardians", style = MaterialTheme.typography.titleLarge)
+            Text("Add people you trust to your emergency response list.")
+            OutlinedTextField(guardianName, { guardianName = it }, Modifier.fillMaxWidth(), label = { Text("Guardian name") })
+            OutlinedTextField(guardianPhone, { guardianPhone = it }, Modifier.fillMaxWidth(), label = { Text("Guardian phone") })
+            OutlinedTextField(guardianEmail, { guardianEmail = it }, Modifier.fillMaxWidth(), label = { Text("Guardian email (optional)") })
+            Button(onClick = {
+                scope.launch {
+                    if (guardianName.trim().length < 2 || guardianPhone.trim().length < 5) {
+                        status = "Enter a valid guardian name and phone"
+                        return@launch
+                    }
+                    status = "Adding guardian..."
+                    runCatching {
+                        ApiClient.service.addGuardian(
+                            GuardianCreate(guardianName.trim(), guardianPhone.trim(), guardianEmail.trim().ifBlank { null })
+                        )
+                        ApiClient.service.listGuardians()
+                    }.onSuccess {
+                        guardians = it
+                        guardianName = ""
+                        guardianPhone = ""
+                        guardianEmail = ""
+                        status = "Guardian added"
+                    }.onFailure { status = "Guardian failed: ${it.message ?: "unknown error"}" }
+                }
+            }, Modifier.fillMaxWidth()) { Text("Add Guardian") }
+
+            if (guardians.isEmpty()) {
+                Text("No guardians added yet.")
+            } else {
+                Text("Your guardians (${guardians.size})", style = MaterialTheme.typography.titleMedium)
+                guardians.forEach { guardian ->
+                    Text("• ${guardian.name} — ${guardian.phone}${guardian.email?.let { " — $it" } ?: ""}")
+                }
+            }
+
             Text("Emergency Safety", style = MaterialTheme.typography.titleLarge)
             Text("Location is captured only from this explicitly paired device.")
 
             Button(
                 enabled = !sosActive && countdown == 0 && prefs.getString("device_id", null) != null,
-                onClick = {
-                    countdown = 5
-                    triggerSOS({ text -> status = text }, { text -> countdown = 0; status = text; sosActive = true })
-                    scope.launch { for (i in 5 downTo 1) { countdown = i; delay(1000) } }
-                },
+                onClick = { triggerSOS({ text -> status = text }, { text -> sosActive = true; status = text }, { countdown = it }) },
                 modifier = Modifier.fillMaxWidth()
             ) { Text(if (countdown > 0) "SOS ACTIVATING… $countdown" else "🚨 EMERGENCY SOS") }
 
             if (countdown > 0) {
-                OutlinedButton(onClick = { countdown = 0; cancelSOS { status = it } }, Modifier.fillMaxWidth()) { Text("Cancel SOS") }
+                OutlinedButton(onClick = { cancelSOS({ status = it }, { countdown = it }) }, Modifier.fillMaxWidth()) { Text("Cancel SOS") }
             }
             if (sosActive) {
                 OutlinedButton(onClick = { status = "Resolve the SOS from the dashboard" }, Modifier.fillMaxWidth()) { Text("SOS ACTIVE") }
@@ -159,6 +206,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        sosCountdownJob?.cancel()
         if (::tracker.isInitialized) tracker.stop()
         super.onDestroy()
     }
