@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
-from . import location_models, models, safety_models  # noqa: F401
+from . import location_models, models, notification_models, safety_models  # noqa: F401
 from .location_routes import router as location_router
 from .routes import router
 from .safety_routes import router as safety_router
@@ -11,7 +11,7 @@ Base.metadata.create_all(bind=engine)
 
 app = FastAPI(
     title="Sentinel API",
-    version="0.4.0",
+    version="0.5.0",
     description="Privacy-first personal safety and device recovery API.",
 )
 
@@ -30,7 +30,7 @@ app.include_router(safety_router)
 
 @app.get("/")
 def root() -> dict[str, str]:
-    return {"name": "Sentinel API", "status": "ok", "version": "0.4.0"}
+    return {"name": "Sentinel API", "status": "ok", "version": "0.5.0"}
 
 
 @app.get("/health")
