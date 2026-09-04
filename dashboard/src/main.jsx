@@ -50,8 +50,8 @@ function Login({ onLogin }) {
   </section></main>;
 }
 
-function MapPanel({ location }) {
-  const mapRef = React.useRef(null); const map = React.useRef(null); const marker = React.useRef(null);
+function MapPanel({ location, journeyPoints = [], journey }) {
+  const mapRef = React.useRef(null); const map = React.useRef(null); const marker = React.useRef(null); const trail = React.useRef(null);
   useEffect(() => {
     if (!mapRef.current || map.current) return;
     map.current = L.map(mapRef.current).setView([20.5937, 78.9629], 5);
@@ -59,13 +59,148 @@ function MapPanel({ location }) {
     return () => map.current?.remove();
   }, []);
   useEffect(() => {
+    if (!map.current) return;
+    if (trail.current) { trail.current.remove(); trail.current = null; }
+    const points = journeyPoints.map(p => [p.latitude, p.longitude]);
+    if (points.length > 1) trail.current = L.polyline(points, { weight: 4 }).addTo(map.current);
+  }, [journeyPoints]);
+  useEffect(() => {
     if (!map.current || !location) return;
     const point = [location.latitude, location.longitude];
     if (!marker.current) marker.current = L.marker(point).addTo(map.current); else marker.current.setLatLng(point);
-    marker.current.bindPopup(`<b>Latest device location</b><br>${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`).openPopup();
+    marker.current.bindPopup(`<b>${journey ? "Journey location" : "Latest device location"}</b><br>${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`).openPopup();
     map.current.setView(point, 16);
-  }, [location]);
+  }, [location, journey]);
   return <div ref={mapRef} className="map" />;
+}
+
+function JourneyPanel({ token, selectedDevice, latest, onError }) {
+  const [journeys, setJourneys] = useState([]);
+  const [activeJourney, setActiveJourney] = useState(null);
+  const [journeyPoints, setJourneyPoints] = useState([]);
+  const [destination, setDestination] = useState("");
+  const [eta, setEta] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [journeyStatus, setJourneyStatus] = useState("Ready");
+
+  async function loadJourneys() {
+    const data = await request("/api/v1/journeys", {}, token);
+    setJourneys(data);
+    const active = data.find(item => item.status === "active");
+    setActiveJourney(active || null);
+  }
+
+  async function loadPoints(journeyId) {
+    if (!journeyId) return;
+    const data = await request(`/api/v1/journeys/${journeyId}/points`, {}, token);
+    setJourneyPoints(data);
+  }
+
+  useEffect(() => { loadJourneys().catch(err => onError(err.message)); }, [token]);
+  useEffect(() => {
+    if (!activeJourney) { setJourneyPoints([]); return; }
+    loadPoints(activeJourney.id).catch(err => onError(err.message));
+    const timer = setInterval(async () => {
+      try {
+        const refreshed = await request(`/api/v1/journeys/${activeJourney.id}`, {}, token);
+        setActiveJourney(refreshed);
+        await loadPoints(activeJourney.id);
+      } catch (_) {}
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [activeJourney?.id, token]);
+
+  function getBrowserPosition() {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) return reject(new Error("Browser geolocation is not available"));
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 });
+    });
+  }
+
+  async function startJourney() {
+    if (!selectedDevice) return onError("Pair/select a device first");
+    if (!destination.trim() || !eta) return onError("Enter a destination and ETA");
+    setBusy(true); setJourneyStatus("Getting current location…");
+    try {
+      let latitude = latest?.latitude ?? null;
+      let longitude = latest?.longitude ?? null;
+      if (latitude == null || longitude == null) {
+        const position = await getBrowserPosition();
+        latitude = position.coords.latitude; longitude = position.coords.longitude;
+      }
+      const created = await request("/api/v1/journeys", {
+        method: "POST",
+        body: JSON.stringify({
+          device_id: selectedDevice.id,
+          destination: destination.trim(),
+          start_latitude: latitude,
+          start_longitude: longitude,
+          end_latitude: null,
+          end_longitude: null,
+          eta: new Date(eta).toISOString(),
+        }),
+      }, token);
+      setActiveJourney(created);
+      setJourneys(prev => [created, ...prev.filter(item => item.id !== created.id)]);
+      setJourneyStatus("Journey active — location updates can be sent below");
+      setDestination(""); setEta("");
+      await sendPoint(created, latitude, longitude);
+    } catch (err) { onError(err.message); setJourneyStatus("Unable to start journey"); }
+    finally { setBusy(false); }
+  }
+
+  async function sendPoint(journey = activeJourney, latitude = null, longitude = null) {
+    if (!journey) return;
+    setBusy(true);
+    try {
+      if (latitude == null || longitude == null) {
+        const position = await getBrowserPosition();
+        latitude = position.coords.latitude; longitude = position.coords.longitude;
+      }
+      const point = await request(`/api/v1/journeys/${journey.id}/points`, {
+        method: "POST",
+        body: JSON.stringify({ latitude, longitude, speed_mps: null, bearing: null, battery_level: null, recorded_at: new Date().toISOString() }),
+      }, token);
+      setJourneyPoints(prev => [...prev, point]);
+      const refreshed = await request(`/api/v1/journeys/${journey.id}`, {}, token);
+      setActiveJourney(refreshed);
+      setJourneyStatus(`Location sent at ${new Date().toLocaleTimeString()}`);
+    } catch (err) { onError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  async function completeJourney() {
+    if (!activeJourney) return;
+    setBusy(true);
+    try {
+      const completed = await request(`/api/v1/journeys/${activeJourney.id}/complete`, { method: "POST" }, token);
+      setJourneys(prev => prev.map(item => item.id === completed.id ? completed : item));
+      setActiveJourney(null); setJourneyPoints([]); setJourneyStatus("Journey completed");
+    } catch (err) { onError(err.message); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="journey-section">
+    <div className="card journey-card">
+      <div className="journey-header"><div><p className="eyebrow">SAFE JOURNEY MODE</p><h3>Plan and monitor a journey</h3><p className="muted">Use your browser location or the latest enrolled-device location. Tracking is user initiated.</p></div>{activeJourney && <span className="journey-live">● JOURNEY ACTIVE</span>}</div>
+      {!activeJourney ? <div className="journey-form">
+        <label>Destination<input value={destination} onChange={e => setDestination(e.target.value)} placeholder="e.g. Home, College, Airport" /></label>
+        <label>Expected arrival<input value={eta} onChange={e => setEta(e.target.value)} type="datetime-local" /></label>
+        <button disabled={busy || !selectedDevice} onClick={startJourney}>{busy ? "Starting…" : "▶ Start Safe Journey"}</button>
+      </div> : <>
+        <div className="journey-summary">
+          <div><span>Destination</span><strong>{activeJourney.destination}</strong></div>
+          <div><span>Risk score</span><strong className={activeJourney.risk_score >= 60 ? "risk-high" : activeJourney.risk_score >= 30 ? "risk-medium" : "risk-low"}>{activeJourney.risk_score}/100</strong></div>
+          <div><span>ETA</span><strong>{new Date(activeJourney.eta).toLocaleString()}</strong></div>
+          <div><span>Points</span><strong>{journeyPoints.length}</strong></div>
+        </div>
+        <div className="journey-actions"><button disabled={busy} onClick={() => sendPoint()}>{busy ? "Updating…" : "📍 Send Current Location"}</button><button className="secondary" disabled={busy} onClick={completeJourney}>✓ Complete Journey</button></div>
+        <p className="journey-status">{journeyStatus}</p>
+        <div className="journey-map"><MapPanel location={journeyPoints[journeyPoints.length - 1] || latest} journeyPoints={journeyPoints} journey={activeJourney} /></div>
+      </>}
+    </div>
+    {journeys.length > 0 && <div className="card journey-history"><div className="section-title"><span>Journey history</span><span className="muted">{journeys.length} journeys</span></div>{journeys.slice(0, 5).map(item => <div className="journey-row" key={item.id}><div><strong>{item.destination}</strong><small>{new Date(item.created_at).toLocaleString()} · {item.status}</small></div><span className="journey-score">{item.risk_score}/100</span></div>)}</div>}
+  </section>;
 }
 
 function Dashboard({ token, onLogout }) {
@@ -114,6 +249,7 @@ function Dashboard({ token, onLogout }) {
           <div className="card stat"><span>Battery</span><strong>{latest?.battery_level != null ? `${Math.round(latest.battery_level)}%` : "—"}</strong><small>Latest reported level</small></div>
           <div className={`card stat ${activeSOS ? "danger-stat" : ""}`}><span>Safety status</span><strong>{activeSOS ? "SOS ACTIVE" : "All clear"}</strong><small>{sosEvents.length} recorded SOS events</small></div>
         </div>
+        <JourneyPanel token={token} selectedDevice={selectedDevice} latest={latest} onError={setError} />
         <div className="card map-card"><div className="map-header"><div><h3>Live location</h3><p className="muted">Polling every 10 seconds while this dashboard is open.</p></div>{latest && <span className="live-pill">● LIVE</span>}</div><MapPanel location={latest} /></div>
         <div className="card timeline"><div className="section-title"><span>Location timeline</span><span className="muted">{selectedDevice?.name || "Select a device"}</span></div>{locations.length === 0 ? <p className="muted empty">No location records received yet.</p> : locations.slice(0, 8).map(item => <div className="timeline-row" key={item.id}><span className="timeline-dot" /><div><strong>{item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</strong><small>{new Date(item.recorded_at || item.received_at).toLocaleString()} · ±{item.accuracy_m ? Math.round(item.accuracy_m) : "—"}m</small></div></div>)}</div>
         <div className="card timeline"><div className="section-title"><span>Recent safety events</span><span className="muted">Last {sosEvents.length}</span></div>{sosEvents.length === 0 ? <p className="muted empty">No SOS events recorded.</p> : sosEvents.slice(0, 6).map(event => <div className="safety-row" key={event.id}><div><strong>{event.status.toUpperCase()}</strong><small>{new Date(event.created_at).toLocaleString()} · {event.message || "Emergency event"}</small></div>{event.status !== "resolved" && <div><button className="mini" onClick={() => safetyAction(event.id, "acknowledge")} disabled={actionBusy === event.id || event.status === "acknowledged"}>Ack</button><button className="mini secondary" onClick={() => safetyAction(event.id, "resolve")} disabled={actionBusy === event.id}>Resolve</button></div>}</div>)}</div>
