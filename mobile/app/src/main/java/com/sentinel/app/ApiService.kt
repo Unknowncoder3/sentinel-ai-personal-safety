@@ -2,7 +2,6 @@ package com.sentinel.app
 
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
-import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import retrofit2.http.Body
@@ -16,7 +15,23 @@ private const val API_BASE_URL = "http://10.0.2.2:8000/"
 data class TokenResponse(val access_token: String, val token_type: String)
 data class DeviceCreate(val name: String, val platform: String, val device_identifier: String)
 data class DeviceResponse(val id: String, val name: String, val platform: String, val device_identifier: String)
-data class LocationPayload(val latitude: Double, val longitude: Double, val accuracy_m: Float?, val battery_level: Float?, val recorded_at: String?)
+data class LocationPayload(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy_m: Float?,
+    val battery_level: Float?,
+    val recorded_at: String?
+)
+data class LocationResponse(
+    val latitude: Double,
+    val longitude: Double,
+    val accuracy_m: Float?,
+    val battery_level: Float?,
+    val recorded_at: String?,
+    val id: String,
+    val device_id: String,
+    val received_at: String
+)
 
 interface SentinelApi {
     @FormUrlEncoded
@@ -27,7 +42,7 @@ interface SentinelApi {
     suspend fun registerDevice(@Body device: DeviceCreate): DeviceResponse
 
     @POST("api/v1/devices/{deviceId}/location")
-    suspend fun updateLocation(@Path("deviceId") deviceId: String, @Body location: LocationPayload): Response<Unit>
+    suspend fun updateLocation(@Path("deviceId") deviceId: String, @Body location: LocationPayload): LocationResponse
 }
 
 class AuthInterceptor(private val tokenProvider: () -> String?) : Interceptor {
