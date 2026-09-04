@@ -27,9 +27,7 @@ function Login({ onLogin }) {
     try {
       const form = new URLSearchParams({ username: email.trim(), password });
       const response = await fetch(`${API}/api/v1/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: form,
+        method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: form,
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Unable to sign in");
@@ -39,138 +37,90 @@ function Login({ onLogin }) {
     finally { setBusy(false); }
   }
 
-  return <main className="auth-shell">
-    <section className="auth-card">
-      <div className="brand-mark">S</div>
-      <p className="eyebrow">SENTINEL AI</p>
-      <h1>Personal safety command center</h1>
-      <p className="muted">Sign in to monitor your enrolled devices and safety status.</p>
-      <form onSubmit={submit} className="stack">
-        <label>Email<input value={email} onChange={e => setEmail(e.target.value)} type="email" required /></label>
-        <label>Password<input value={password} onChange={e => setPassword(e.target.value)} type="password" required /></label>
-        {error && <div className="error">{error}</div>}
-        <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-      </form>
-      <small className="muted">API: {API}</small>
-    </section>
-  </main>;
+  return <main className="auth-shell"><section className="auth-card">
+    <div className="brand-mark">S</div><p className="eyebrow">SENTINEL AI</p>
+    <h1>Personal safety command center</h1>
+    <p className="muted">Sign in to monitor your enrolled devices and safety status.</p>
+    <form onSubmit={submit} className="stack">
+      <label>Email<input value={email} onChange={e => setEmail(e.target.value)} type="email" required /></label>
+      <label>Password<input value={password} onChange={e => setPassword(e.target.value)} type="password" required /></label>
+      {error && <div className="error">{error}</div>}
+      <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+    </form><small className="muted">API: {API}</small>
+  </section></main>;
 }
 
 function MapPanel({ location }) {
-  const mapRef = React.useRef(null);
-  const map = React.useRef(null);
-  const marker = React.useRef(null);
-
+  const mapRef = React.useRef(null); const map = React.useRef(null); const marker = React.useRef(null);
   useEffect(() => {
     if (!mapRef.current || map.current) return;
     map.current = L.map(mapRef.current).setView([20.5937, 78.9629], 5);
-    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      attribution: "&copy; OpenStreetMap contributors",
-    }).addTo(map.current);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { attribution: "&copy; OpenStreetMap contributors" }).addTo(map.current);
     return () => map.current?.remove();
   }, []);
-
   useEffect(() => {
     if (!map.current || !location) return;
     const point = [location.latitude, location.longitude];
-    if (!marker.current) marker.current = L.marker(point).addTo(map.current);
-    else marker.current.setLatLng(point);
+    if (!marker.current) marker.current = L.marker(point).addTo(map.current); else marker.current.setLatLng(point);
     marker.current.bindPopup(`<b>Latest device location</b><br>${location.latitude.toFixed(5)}, ${location.longitude.toFixed(5)}`).openPopup();
     map.current.setView(point, 16);
   }, [location]);
-
   return <div ref={mapRef} className="map" />;
 }
 
 function Dashboard({ token, onLogout }) {
-  const [user, setUser] = useState(null);
-  const [devices, setDevices] = useState([]);
-  const [selected, setSelected] = useState("");
-  const [locations, setLocations] = useState([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-
+  const [user, setUser] = useState(null), [devices, setDevices] = useState([]), [selected, setSelected] = useState("");
+  const [locations, setLocations] = useState([]), [sosEvents, setSosEvents] = useState([]), [guardians, setGuardians] = useState([]);
+  const [error, setError] = useState(""), [loading, setLoading] = useState(true), [actionBusy, setActionBusy] = useState("");
   const selectedDevice = useMemo(() => devices.find(d => d.id === selected), [devices, selected]);
-  const latest = locations[0] || (selectedDevice?.last_latitude != null ? {
-    latitude: selectedDevice.last_latitude,
-    longitude: selectedDevice.last_longitude,
-    battery_level: selectedDevice.battery_level,
-    recorded_at: selectedDevice.last_seen_at,
-  } : null);
+  const latest = locations[0] || (selectedDevice?.last_latitude != null ? { latitude: selectedDevice.last_latitude, longitude: selectedDevice.last_longitude, battery_level: selectedDevice.battery_level, recorded_at: selectedDevice.last_seen_at } : null);
+  const activeSOS = sosEvents.find(event => event.status !== "resolved");
 
-  async function loadDevices() {
-    const data = await request("/api/v1/devices", {}, token);
-    setDevices(data);
-    setSelected(current => current || data[0]?.id || "");
-  }
-
+  async function loadDevices() { const data = await request("/api/v1/devices", {}, token); setDevices(data); setSelected(current => current || data[0]?.id || ""); }
   async function loadLocations(deviceId) {
     if (!deviceId) return;
     const data = await request(`/api/v1/devices/${deviceId}/locations?limit=100`, {}, token);
     setLocations([...data].sort((a, b) => new Date(b.recorded_at || b.received_at) - new Date(a.recorded_at || a.received_at)));
   }
+  async function loadSafety() {
+    const [sos, guardianList] = await Promise.all([request("/api/v1/safety/sos", {}, token), request("/api/v1/safety/guardians", {}, token)]);
+    setSosEvents(sos); setGuardians(guardianList);
+  }
+  async function safetyAction(eventId, action) {
+    setActionBusy(eventId);
+    try { await request(`/api/v1/safety/sos/${eventId}/${action}`, { method: "POST" }, token); await loadSafety(); }
+    catch (err) { setError(err.message); } finally { setActionBusy(""); }
+  }
 
-  useEffect(() => {
-    (async () => {
-      try {
-        setLoading(true);
-        setUser(await request("/api/v1/auth/me", {}, token));
-        await loadDevices();
-      } catch (err) { setError(err.message); }
-      finally { setLoading(false); }
-    })();
-  }, [token]);
-
-  useEffect(() => {
-    if (!selected) return;
-    loadLocations(selected).catch(err => setError(err.message));
-    const timer = setInterval(() => loadLocations(selected).catch(() => {}), 10000);
-    return () => clearInterval(timer);
-  }, [selected]);
-
+  useEffect(() => { (async () => { try { setLoading(true); setUser(await request("/api/v1/auth/me", {}, token)); await Promise.all([loadDevices(), loadSafety()]); } catch (err) { setError(err.message); } finally { setLoading(false); } })(); }, [token]);
+  useEffect(() => { if (!selected) return; loadLocations(selected).catch(err => setError(err.message)); const timer = setInterval(() => { loadLocations(selected).catch(() => {}); loadSafety().catch(() => {}); }, 10000); return () => clearInterval(timer); }, [selected]);
   if (loading) return <div className="loading">Loading Sentinel…</div>;
 
   return <main className="dashboard">
-    <header className="topbar">
-      <div><p className="eyebrow">SENTINEL AI</p><h2>Safety command center</h2></div>
-      <div className="top-actions"><span className="status-dot" /> {user?.name || user?.email || "Account"}<button className="ghost" onClick={onLogout}>Sign out</button></div>
-    </header>
+    <header className="topbar"><div><p className="eyebrow">SENTINEL AI</p><h2>Safety command center</h2></div><div className="top-actions"><span className="status-dot" /> {user?.name || user?.email || "Account"}<button className="ghost" onClick={onLogout}>Sign out</button></div></header>
     {error && <div className="error banner">{error}</div>}
+    {activeSOS && <section className="sos-alert"><div><span className="sos-badge">EMERGENCY SOS</span><h3>{activeSOS.status === "acknowledged" ? "SOS acknowledged" : "Immediate attention required"}</h3><p>{activeSOS.message || "An emergency SOS was activated."}</p><small>{new Date(activeSOS.created_at).toLocaleString()} · {activeSOS.latitude?.toFixed(5)}, {activeSOS.longitude?.toFixed(5)}</small></div><div className="sos-actions"><button disabled={actionBusy === activeSOS.id || activeSOS.status === "acknowledged"} onClick={() => safetyAction(activeSOS.id, "acknowledge")}>{actionBusy === activeSOS.id ? "Updating…" : "Acknowledge"}</button><button className="secondary" disabled={actionBusy === activeSOS.id} onClick={() => safetyAction(activeSOS.id, "resolve")}>Resolve</button></div></section>}
     <section className="grid">
       <aside className="sidebar card">
         <div className="section-title"><span>Enrolled devices</span><span className="count">{devices.length}</span></div>
-        {devices.length === 0 ? <p className="muted">No device paired yet. Pair a phone from the Sentinel Android app.</p> : devices.map(device =>
-          <button key={device.id} className={`device ${selected === device.id ? "active" : ""}`} onClick={() => setSelected(device.id)}>
-            <span className="device-icon">⌁</span><span><strong>{device.name}</strong><small>{device.platform} · {device.is_online ? "Online" : "Offline"}</small></span>
-          </button>
-        )}
+        {devices.length === 0 ? <p className="muted">No device paired yet. Pair a phone from the Sentinel Android app.</p> : devices.map(device => <button key={device.id} className={`device ${selected === device.id ? "active" : ""}`} onClick={() => setSelected(device.id)}><span className="device-icon">⌁</span><span><strong>{device.name}</strong><small>{device.platform} · {device.is_online ? "Online" : "Offline"}</small></span></button>)}
+        <div className="sidebar-divider" /><div className="section-title"><span>Trusted guardians</span><span className="count">{guardians.length}</span></div>
+        {guardians.length === 0 ? <p className="muted">No guardians configured.</p> : guardians.map(g => <div className="guardian" key={g.id}><strong>{g.name}</strong><small>{g.phone}{g.email ? ` · ${g.email}` : ""}</small></div>)}
       </aside>
       <section className="content">
         <div className="stats">
           <div className="card stat"><span>Device</span><strong>{selectedDevice?.name || "—"}</strong><small>{selectedDevice?.device_identifier || "No selection"}</small></div>
           <div className="card stat"><span>Connection</span><strong>{selectedDevice ? (selectedDevice.is_online ? "Online" : "Offline") : "—"}</strong><small>{selectedDevice?.last_seen_at ? new Date(selectedDevice.last_seen_at).toLocaleString() : "No signal yet"}</small></div>
           <div className="card stat"><span>Battery</span><strong>{latest?.battery_level != null ? `${Math.round(latest.battery_level)}%` : "—"}</strong><small>Latest reported level</small></div>
-          <div className="card stat"><span>Location updates</span><strong>{locations.length}</strong><small>Last 100 records</small></div>
+          <div className={`card stat ${activeSOS ? "danger-stat" : ""}`}><span>Safety status</span><strong>{activeSOS ? "SOS ACTIVE" : "All clear"}</strong><small>{sosEvents.length} recorded SOS events</small></div>
         </div>
-        <div className="card map-card">
-          <div className="map-header"><div><h3>Live location</h3><p className="muted">Polling every 10 seconds while this dashboard is open.</p></div>{latest && <span className="live-pill">● LIVE</span>}</div>
-          <MapPanel location={latest} />
-        </div>
-        <div className="card timeline">
-          <div className="section-title"><span>Location timeline</span><span className="muted">{selectedDevice?.name || "Select a device"}</span></div>
-          {locations.length === 0 ? <p className="muted empty">No location records received yet.</p> : locations.slice(0, 8).map(item =>
-            <div className="timeline-row" key={item.id}><span className="timeline-dot" /><div><strong>{item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</strong><small>{new Date(item.recorded_at || item.received_at).toLocaleString()} · ±{item.accuracy_m ? Math.round(item.accuracy_m) : "—"}m</small></div></div>
-          )}
-        </div>
+        <div className="card map-card"><div className="map-header"><div><h3>Live location</h3><p className="muted">Polling every 10 seconds while this dashboard is open.</p></div>{latest && <span className="live-pill">● LIVE</span>}</div><MapPanel location={latest} /></div>
+        <div className="card timeline"><div className="section-title"><span>Location timeline</span><span className="muted">{selectedDevice?.name || "Select a device"}</span></div>{locations.length === 0 ? <p className="muted empty">No location records received yet.</p> : locations.slice(0, 8).map(item => <div className="timeline-row" key={item.id}><span className="timeline-dot" /><div><strong>{item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</strong><small>{new Date(item.recorded_at || item.received_at).toLocaleString()} · ±{item.accuracy_m ? Math.round(item.accuracy_m) : "—"}m</small></div></div>)}</div>
+        <div className="card timeline"><div className="section-title"><span>Recent safety events</span><span className="muted">Last {sosEvents.length}</span></div>{sosEvents.length === 0 ? <p className="muted empty">No SOS events recorded.</p> : sosEvents.slice(0, 6).map(event => <div className="safety-row" key={event.id}><div><strong>{event.status.toUpperCase()}</strong><small>{new Date(event.created_at).toLocaleString()} · {event.message || "Emergency event"}</small></div>{event.status !== "resolved" && <div><button className="mini" onClick={() => safetyAction(event.id, "acknowledge")} disabled={actionBusy === event.id || event.status === "acknowledged"}>Ack</button><button className="mini secondary" onClick={() => safetyAction(event.id, "resolve")} disabled={actionBusy === event.id}>Resolve</button></div>}</div>)}</div>
       </section>
     </section>
   </main>;
 }
 
-function App() {
-  const [token, setToken] = useState(localStorage.getItem("sentinel_token"));
-  if (!token) return <Login onLogin={setToken} />;
-  return <Dashboard token={token} onLogout={() => { localStorage.removeItem("sentinel_token"); setToken(null); }} />;
-}
-
+function App() { const [token, setToken] = useState(localStorage.getItem("sentinel_token")); if (!token) return <Login onLogin={setToken} />; return <Dashboard token={token} onLogout={() => { localStorage.removeItem("sentinel_token"); setToken(null); }} />; }
 createRoot(document.getElementById("root")).render(<App />);
