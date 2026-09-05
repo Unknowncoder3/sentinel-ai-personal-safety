@@ -118,7 +118,6 @@ function JourneyPanel({ token, selectedDevice, latest, onError }) {
   }
 
   async function startJourney() {
-    if (!selectedDevice) return onError("Pair/select a device first");
     if (!destination.trim() || !eta) return onError("Enter a destination and ETA");
     setBusy(true); setJourneyStatus("Getting current location…");
     try {
@@ -131,7 +130,7 @@ function JourneyPanel({ token, selectedDevice, latest, onError }) {
       const created = await request("/api/v1/journeys", {
         method: "POST",
         body: JSON.stringify({
-          device_id: selectedDevice.id,
+          device_id: selectedDevice?.id ?? null,
           destination: destination.trim(),
           start_latitude: latitude,
           start_longitude: longitude,
@@ -186,7 +185,7 @@ function JourneyPanel({ token, selectedDevice, latest, onError }) {
       {!activeJourney ? <div className="journey-form">
         <label>Destination<input value={destination} onChange={e => setDestination(e.target.value)} placeholder="e.g. Home, College, Airport" /></label>
         <label>Expected arrival<input value={eta} onChange={e => setEta(e.target.value)} type="datetime-local" /></label>
-        <button disabled={busy || !selectedDevice} onClick={startJourney}>{busy ? "Starting…" : "▶ Start Safe Journey"}</button>
+        <button disabled={busy} onClick={startJourney}>{busy ? "Starting…" : "▶ Start Safe Journey"}</button>
       </div> : <>
         <div className="journey-summary">
           <div><span>Destination</span><strong>{activeJourney.destination}</strong></div>
@@ -238,25 +237,30 @@ function Dashboard({ token, onLogout }) {
     <section className="grid">
       <aside className="sidebar card">
         <div className="section-title"><span>Enrolled devices</span><span className="count">{devices.length}</span></div>
-        {devices.length === 0 ? <p className="muted">No device paired yet. Pair a phone from the Sentinel Android app.</p> : devices.map(device => <button key={device.id} className={`device ${selected === device.id ? "active" : ""}`} onClick={() => setSelected(device.id)}><span className="device-icon">⌁</span><span><strong>{device.name}</strong><small>{device.platform} · {device.is_online ? "Online" : "Offline"}</small></span></button>)}
-        <div className="sidebar-divider" /><div className="section-title"><span>Trusted guardians</span><span className="count">{guardians.length}</span></div>
+        {devices.length === 0 ? <p className="muted">No device paired yet. You can still test Safe Journey Mode using this browser.</p> : devices.map(device => <button key={device.id} className={`device ${selected === device.id ? "active" : ""}`} onClick={() => setSelected(device.id)}><span className="device-icon">⌁</span><span><strong>{device.name}</strong><small>{device.platform} · {device.is_online ? "online" : "offline"}</small></span></button>)}
+        <div className="divider" />
+        <div className="section-title"><span>Trusted guardians</span><span className="count">{guardians.length}</span></div>
         {guardians.length === 0 ? <p className="muted">No guardians configured.</p> : guardians.map(g => <div className="guardian" key={g.id}><strong>{g.name}</strong><small>{g.phone}{g.email ? ` · ${g.email}` : ""}</small></div>)}
       </aside>
-      <section className="content">
-        <div className="stats">
-          <div className="card stat"><span>Device</span><strong>{selectedDevice?.name || "—"}</strong><small>{selectedDevice?.device_identifier || "No selection"}</small></div>
-          <div className="card stat"><span>Connection</span><strong>{selectedDevice ? (selectedDevice.is_online ? "Online" : "Offline") : "—"}</strong><small>{selectedDevice?.last_seen_at ? new Date(selectedDevice.last_seen_at).toLocaleString() : "No signal yet"}</small></div>
-          <div className="card stat"><span>Battery</span><strong>{latest?.battery_level != null ? `${Math.round(latest.battery_level)}%` : "—"}</strong><small>Latest reported level</small></div>
-          <div className={`card stat ${activeSOS ? "danger-stat" : ""}`}><span>Safety status</span><strong>{activeSOS ? "SOS ACTIVE" : "All clear"}</strong><small>{sosEvents.length} recorded SOS events</small></div>
-        </div>
+      <div className="content">
+        <section className="stats">
+          <div className="stat card"><span>DEVICE</span><strong>{selectedDevice?.name || "—"}</strong><small>{selectedDevice ? selectedDevice.platform : "No selection"}</small></div>
+          <div className="stat card"><span>CONNECTION</span><strong>{selectedDevice ? (selectedDevice.is_online ? "Online" : "Offline") : "—"}</strong><small>{selectedDevice?.last_seen_at ? new Date(selectedDevice.last_seen_at).toLocaleString() : "No signal yet"}</small></div>
+          <div className="stat card"><span>BATTERY</span><strong>{selectedDevice?.battery_level != null ? `${Math.round(selectedDevice.battery_level)}%` : "—"}</strong><small>Latest reported level</small></div>
+          <div className="stat card"><span>SAFETY STATUS</span><strong>{activeSOS ? "SOS ACTIVE" : "All clear"}</strong><small>{sosEvents.length} recorded SOS events</small></div>
+        </section>
         <JourneyPanel token={token} selectedDevice={selectedDevice} latest={latest} onError={setError} />
-        <div className="card map-card"><div className="map-header"><div><h3>Live location</h3><p className="muted">Polling every 10 seconds while this dashboard is open.</p></div>{latest && <span className="live-pill">● LIVE</span>}</div><MapPanel location={latest} /></div>
-        <div className="card timeline"><div className="section-title"><span>Location timeline</span><span className="muted">{selectedDevice?.name || "Select a device"}</span></div>{locations.length === 0 ? <p className="muted empty">No location records received yet.</p> : locations.slice(0, 8).map(item => <div className="timeline-row" key={item.id}><span className="timeline-dot" /><div><strong>{item.latitude.toFixed(5)}, {item.longitude.toFixed(5)}</strong><small>{new Date(item.recorded_at || item.received_at).toLocaleString()} · ±{item.accuracy_m ? Math.round(item.accuracy_m) : "—"}m</small></div></div>)}</div>
-        <div className="card timeline"><div className="section-title"><span>Recent safety events</span><span className="muted">Last {sosEvents.length}</span></div>{sosEvents.length === 0 ? <p className="muted empty">No SOS events recorded.</p> : sosEvents.slice(0, 6).map(event => <div className="safety-row" key={event.id}><div><strong>{event.status.toUpperCase()}</strong><small>{new Date(event.created_at).toLocaleString()} · {event.message || "Emergency event"}</small></div>{event.status !== "resolved" && <div><button className="mini" onClick={() => safetyAction(event.id, "acknowledge")} disabled={actionBusy === event.id || event.status === "acknowledged"}>Ack</button><button className="mini secondary" onClick={() => safetyAction(event.id, "resolve")} disabled={actionBusy === event.id}>Resolve</button></div>}</div>)}</div>
-      </section>
+        <section className="card map-card"><div className="section-title"><div><strong>Live location</strong><small>Polling every 10 seconds while this dashboard is open.</small></div></div><MapPanel location={latest} /><div className="timeline">{locations.slice(0, 8).map(loc => <div className="timeline-item" key={loc.id}><span className="timeline-dot" /><div><strong>{loc.latitude.toFixed(5)}, {loc.longitude.toFixed(5)}</strong><small>{new Date(loc.recorded_at || loc.received_at).toLocaleString()} · ±{loc.accuracy_m ?? "—"}m</small></div></div>)}</div></section>
+        <section className="card"><div className="section-title"><span>Safety events</span><span className="muted">{sosEvents.length}</span></div>{sosEvents.length === 0 ? <p className="muted">No SOS events recorded.</p> : sosEvents.map(event => <div className="event-row" key={event.id}><div><strong>{event.status.toUpperCase()}</strong><small>{new Date(event.created_at).toLocaleString()} · {event.message || "No message"}</small></div><span>{event.latitude?.toFixed(4)}, {event.longitude?.toFixed(4)}</span></div>)}</section>
+      </div>
     </section>
   </main>;
 }
 
-function App() { const [token, setToken] = useState(localStorage.getItem("sentinel_token")); if (!token) return <Login onLogin={setToken} />; return <Dashboard token={token} onLogout={() => { localStorage.removeItem("sentinel_token"); setToken(null); }} />; }
+function App() {
+  const [token, setToken] = useState(localStorage.getItem("sentinel_token"));
+  if (!token) return <Login onLogin={setToken} />;
+  return <Dashboard token={token} onLogout={() => { localStorage.removeItem("sentinel_token"); setToken(null); }} />;
+}
+
 createRoot(document.getElementById("root")).render(<App />);
